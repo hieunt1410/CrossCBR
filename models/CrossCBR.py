@@ -61,7 +61,7 @@ class CrossCBR(nn.Module):
         self.init_emb()
 
         assert isinstance(raw_graph, list)
-        self.ub_graph, self.ui_graph, self.bi_graph = raw_graph
+        self.ub_graph, self.ui_graph, self.bi_graph, self.ic_graph = raw_graph
 
         # generate the graph without any dropouts for testing
         self.get_item_level_graph_ori()
@@ -77,6 +77,9 @@ class CrossCBR(nn.Module):
 
         self.num_layers = self.conf["num_layers"]
         self.c_temp = self.conf["c_temp"]
+        self.lin = nn.Linear(384, 64)
+        self.uc = to_tensor(laplace_transform(self.ui_graph @ self.ic_graph)).to(self.device)
+        self.bc = to_tensor(laplace_transform(self.bi_graph @ self.ic_graph)).to(self.device)
 
 
     def init_md_dropouts(self):
@@ -92,6 +95,7 @@ class CrossCBR(nn.Module):
         nn.init.xavier_normal_(self.bundles_feature)
         self.items_feature = nn.Parameter(torch.FloatTensor(self.num_items, self.embedding_size))
         nn.init.xavier_normal_(self.items_feature)
+        self.cates_feature = torch.tensor(np.load("genre_feats10M.npy")).to(self.device)
 
 
     def get_item_level_graph(self):
@@ -197,6 +201,7 @@ class CrossCBR(nn.Module):
 
 
     def propagate(self, test=False):
+        cate_feat = self.lin(self.cates_feature)
         #  =============================  item level propagation  =============================
         if test:
             IL_users_feature, IL_items_feature = self.one_propagate(self.item_level_graph_ori, self.users_feature, self.items_feature, self.item_level_dropout, test)
@@ -211,6 +216,16 @@ class CrossCBR(nn.Module):
             BL_users_feature, BL_bundles_feature = self.one_propagate(self.bundle_level_graph_ori, self.users_feature, self.bundles_feature, self.bundle_level_dropout, test)
         else:
             BL_users_feature, BL_bundles_feature = self.one_propagate(self.bundle_level_graph, self.users_feature, self.bundles_feature, self.bundle_level_dropout, test)
+
+
+        u_cates = self.uc @ cate_feat
+        b_cates = self.bc @ cate_feat
+
+        IL_users_feature = torch.cat([IL_users_feature, u_cates], dim=1)
+        BL_users_feature = torch.cat([BL_users_feature, u_cates], dim=1)
+
+        IL_bundles_feature = torch.cat([IL_bundles_feature, b_cates], dim=1)
+        BL_bundles_feature = torch.cat([BL_bundles_feature, b_cates], dim=1)
 
         users_feature = [IL_users_feature, BL_users_feature]
         bundles_feature = [IL_bundles_feature, BL_bundles_feature]
